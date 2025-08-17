@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: simplewatch
+spec:
+  ports:
+    - port: 3306
+  selector:
+    app: mysql
+  clusterIP: None  # Headless service for StatefulSet
+---
+apiVersion: apps/v1
+kind: StatefulSet  # ← Deployment değil!
+metadata:
+  name: mysql
+  namespace: simplewatch
+spec:
+  serviceName: mysql-service  # ← Headless service'e bağlı
+  replicas: 1  # ← 1 MySQL instance
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        ports:
+        - containerPort: 3306
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:   # ← Secret'tan al
+              name: simplewatch-secret
+              key: DB_PASSWORD
+        - name: MYSQL_DATABASE
+          valueFrom:
+            configMapKeyRef:  # ← ConfigMap'ten al
+              name: simplewatch-config
+              key: DB_NAME
+        - name: MYSQL_USER
+          valueFrom:
+            configMapKeyRef:
+              name: simplewatch-config
+              key: DB_USER
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: simplewatch-secret
+              key: DB_PASSWORD
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql  # ← MySQL data klasörü
+        resources:
+          requests:  # ← Minimum garanti
+            memory: "256Mi"
+            cpu: "250m"  # ← Minimum garanti
+          limits:  # ← Minimum garanti
+            memory: "512Mi"
+            cpu: "500m"  # ← Minimum garanti
+  volumeClaimTemplates:  # ← Her pod için otomatik disk   # ← StatefulSet içinde
+  - metadata:
+      name: mysql-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]  # ← Sadece 1 node'dan yazılabilir
+      storageClassName: gp2
+      resources:
+        requests:
+          storage: 5Gi # ← 5GB EBS volume (AWS)

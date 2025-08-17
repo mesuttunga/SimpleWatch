@@ -1,8 +1,26 @@
 # Test files
 *test*.yaml
-*broken*.yaml
-*debug*.yaml
+
+# Secret files
+*secret*.yaml
 
 # Temporary files
-*.tmp
 .DS_Store
+*.tmp
+*.bak
+*.swp
+
+# Node modules
+node_modules/
+
+# Composer vendor
+vendor/
+
+# Production files
+*production*.yaml
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
