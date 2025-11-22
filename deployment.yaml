@@ -17,6 +17,17 @@ spec:
         image: nginx:1.27
         ports:
         - containerPort: 80
+        env:
+        - name: APP_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_ENV
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: LOG_LEVEL
         resources:
           requests:
             memory: "64Mi"
