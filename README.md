@@ -9,10 +9,9 @@ Lightweight uptime monitoring for APIs and websites, designed to run on Kubernet
 - Easy deployment with YAML manifests
 
 ## Quick Start
-```bash
 kubectl apply -f deployment.yaml
 kubectl apply -f service.yaml
-```
+
 
 ## Architecture
 - Nginx-based frontend
