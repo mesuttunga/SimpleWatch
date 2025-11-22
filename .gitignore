@@ -2,3 +2,7 @@
 *test*.yaml
 *broken*.yaml
 *debug*.yaml
+
+# Temporary files
+*.tmp
+.DS_Store
