@@ -1,0 +1,61 @@
+name: Deploy to EKS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Manuel tetikleme
+
+env:
+  AWS_REGION: eu-west-2
+  EKS_CLUSTER: simplewatch-eks
+  DOCKER_IMAGE: mesuttunga/simplewatch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set version tag
+      id: version
+      run: echo "VERSION=v$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+    
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Build and push Docker image
+      run: |
+        docker build -t ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }} ./app
+        docker push ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }}
+        docker tag ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }} ${{ env.DOCKER_IMAGE }}:latest
+        docker push ${{ env.DOCKER_IMAGE }}:latest
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}
+    
+    - name: Deploy to EKS
+      run: |
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/configmap.yaml
+        kubectl apply -f k8s/secret.yaml
+        kubectl apply -f k8s/mysql-statefulset.yaml
+        kubectl apply -f k8s/php-deployment.yaml
+        kubectl apply -f k8s/service.yaml
+    
+    - name: Verify deployment
+      run: |
+        kubectl rollout status deployment/simplewatch-php -n simplewatch
+        kubectl get pods -n simplewatch
