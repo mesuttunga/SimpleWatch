@@ -211,10 +211,6 @@ terraform destroy
 - **AWS EKS**: https://docs.aws.amazon.com/eks/
 - **Terraform**: https://www.terraform.io/docs/
 
-## 🎯 Production URL
-
-**Live Demo**: http://a9e3b14dd8f9f4a74ae015c2226c888a-1717702545.eu-west-2.elb.amazonaws.com
-
 ## 📝 License
 
 MIT

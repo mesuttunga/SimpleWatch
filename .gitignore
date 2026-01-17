@@ -17,6 +17,8 @@ node_modules/
 vendor/
 
 # Production files
+DEPLOYMENT_GUIDE.md
+
 *production*.yaml
 # Terraform
 .terraform/
