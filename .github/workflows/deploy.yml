@@ -1,5 +1,4 @@
-name: Deploy to EKS
-
+name: Build and Deploy
 on:
   push:
     branches: [ main ]
@@ -9,9 +8,10 @@ env:
   AWS_REGION: eu-west-2
   EKS_CLUSTER: simplewatch-eks
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/simplewatch
+  ENABLE_AWS_DEPLOY: false
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
@@ -34,7 +34,16 @@ jobs:
         docker push ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }}
         docker tag ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }} ${{ env.DOCKER_IMAGE }}:latest
         docker push ${{ env.DOCKER_IMAGE }}:latest
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ vars.ENABLE_AWS_DEPLOY == 'true' }}
     
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
