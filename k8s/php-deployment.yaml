@@ -3,8 +3,10 @@ kind: Deployment
 metadata:
   name: simplewatch-php
   namespace: simplewatch
+  labels:
+    app: simplewatch-php
 spec:
-  replicas: 2  # ← 2 pod (high availability)
+  replicas: 2
   selector:
     matchLabels:
       app: simplewatch-php
@@ -13,50 +15,52 @@ spec:
       labels:
         app: simplewatch-php
     spec:
+      # Image pull secret for GHCR (created by GitHub Actions)
+      imagePullSecrets:
+        - name: ghcr-secret
+      
       containers:
-      - name: php
-        image: mesuttunga/simplewatch:v1.0
+      - name: php-container
+        # Image will be updated by GitHub Actions to: ghcr.io/YOUR_USERNAME/simplewatch:SHORT_SHA
+        # For manual deployment, use: docker.io/YOUR_USERNAME/simplewatch:latest
+        image: ghcr.io/GITHUB_USERNAME/REPO_NAME:latest
+        imagePullPolicy: Always
+        
         ports:
         - containerPort: 80
+          name: http
+        
         env:
         - name: APP_NAME
           valueFrom:
             configMapKeyRef:
               name: simplewatch-config
               key: APP_NAME
+        
         - name: CHECK_INTERVAL
           valueFrom:
             configMapKeyRef:
               name: simplewatch-config
               key: CHECK_INTERVAL
+        
         - name: DB_HOST
           valueFrom:
             configMapKeyRef:
               name: simplewatch-config
               key: DB_HOST
+        
+        - name: DB_USER
+          value: "root"
+        
         - name: DB_PASSWORD
           valueFrom:
             secretKeyRef:
               name: simplewatch-secret
               key: DB_PASSWORD
-        # Liveness Probe: Pod çalışıyor mu?
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 80
-          initialDelaySeconds: 30  # ← 30 saniye bekle (başlama süresi)
-          periodSeconds: 10        # ← Her 10 saniyede kontrol et
-          timeoutSeconds: 5        # ← 5 saniye timeout
-          failureThreshold: 3      # ← 3 kez başarısız → Pod'u RESTART et
-        # Readiness Probe: Pod trafiği alabilir mi?
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 80
-          initialDelaySeconds: 10  # ← 10 saniye bekle
-          periodSeconds: 5         # ← Her 5 saniyede kontrol et
-          timeoutSeconds: 3
-          failureThreshold: 3      # ← 3 kez başarısız → Trafik GÖNDERME
+        
+        - name: DB_NAME
+          value: "simplewatch"
+        
         resources:
           requests:
             memory: "128Mi"
@@ -64,4 +68,21 @@ spec:
           limits:
             memory: "256Mi"
             cpu: "200m"
-
+        
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3

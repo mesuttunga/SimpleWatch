@@ -1,39 +1,64 @@
 name: Build and Deploy
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
 env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
   AWS_REGION: eu-west-2
   EKS_CLUSTER: simplewatch-eks
-  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/simplewatch
-  ENABLE_AWS_DEPLOY: false
+  K8S_NAMESPACE: simplewatch
+  DEPLOYMENT_NAME: simplewatch-php
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+      packages: write
+      
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Set version tag
-      id: version
-      run: echo "VERSION=v$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
-    
-    - name: Login to DockerHub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-    
-    - name: Build and push Docker image
-      run: |
-        docker build -t ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }} ./app
-        docker push ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }}
-        docker tag ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }} ${{ env.DOCKER_IMAGE }}:latest
-        docker push ${{ env.DOCKER_IMAGE }}:latest
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Image digest
+        run: echo "Built image with tags - ${{ steps.meta.outputs.tags }}"
 
   deploy:
     needs: build
@@ -41,36 +66,143 @@ jobs:
     if: ${{ vars.ENABLE_AWS_DEPLOY == 'true' }}
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
       
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Update kubeconfig
-      run: |
-        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}
-    
-    - name: Create Kubernetes secret
-      run: |
-        kubectl create secret generic simplewatch-secret \
-          --from-literal=DB_PASSWORD=SimpleWatch2024! \
-          --namespace=simplewatch \
-          --dry-run=client -o yaml | kubectl apply -f -
-    
-    - name: Deploy to EKS
-      run: |
-        kubectl apply -f k8s/namespace.yaml
-        kubectl apply -f k8s/configmap.yaml
-        kubectl apply -f k8s/mysql-statefulset.yaml
-        kubectl apply -f k8s/php-deployment.yaml
-        kubectl apply -f k8s/service.yaml
-    
-    - name: Verify deployment
-      run: |
-        kubectl rollout status deployment/simplewatch-php -n simplewatch
-        kubectl get pods -n simplewatch
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER }}
+          kubectl version --client
+          kubectl cluster-info
+      
+      - name: Create/Update Kubernetes secrets
+        run: |
+          kubectl create secret generic simplewatch-secret \
+            --from-literal=DB_PASSWORD='${{ secrets.DB_PASSWORD }}' \
+            --namespace=${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          echo "✓ Secret updated successfully"
+      
+      - name: Create image pull secret for GHCR
+        run: |
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=${{ env.REGISTRY }} \
+            --docker-username=${{ github.actor }} \
+            --docker-password=${{ secrets.GITHUB_TOKEN }} \
+            --namespace=${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          echo "✓ Image pull secret created"
+      
+      - name: Deploy Kubernetes manifests
+        run: |
+          echo "Deploying to namespace: ${{ env.K8S_NAMESPACE }}"
+          
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/mysql-statefulset.yaml
+          kubectl apply -f k8s/php-deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          
+          echo "✓ Manifests applied"
+      
+      - name: Update deployment image
+        run: |
+          # Get the short SHA that was built
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          
+          echo "Updating deployment to use image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}"
+          
+          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
+            php-container=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA} \
+            -n ${{ env.K8S_NAMESPACE }}
+          
+          echo "✓ Image updated to ${SHORT_SHA}"
+      
+      - name: Wait for rollout
+        id: rollout
+        run: |
+          echo "Waiting for deployment rollout..."
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=5m
+          
+          echo "✓ Rollout completed successfully"
+        continue-on-error: true
+      
+      - name: Rollback on failure
+        if: steps.rollout.outcome == 'failure'
+        run: |
+          echo "::error::Deployment failed, initiating rollback"
+          kubectl rollout undo deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
+          
+          echo "Waiting for rollback to complete..."
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=3m
+          
+          echo "✓ Rollback completed"
+          exit 1
+      
+      - name: Verify deployment
+        if: steps.rollout.outcome == 'success'
+        run: |
+          echo "=== Deployment Status ==="
+          kubectl get deployment ${{ env.DEPLOYMENT_NAME }} -n ${{ env.K8S_NAMESPACE }}
+          
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=simplewatch-php
+          
+          echo ""
+          echo "=== Service Status ==="
+          kubectl get service simplewatch-service -n ${{ env.K8S_NAMESPACE }}
+          
+          # Get LoadBalancer URL
+          LB_URL=$(kubectl get service simplewatch-service -n ${{ env.K8S_NAMESPACE }} \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "pending")
+          
+          echo ""
+          echo "=== LoadBalancer URL ==="
+          echo "http://${LB_URL}"
+      
+      - name: Health check
+        if: steps.rollout.outcome == 'success'
+        run: |
+          echo "Running health checks..."
+          
+          # Wait for pods to be ready
+          kubectl wait --for=condition=ready pod \
+            -l app=simplewatch-php \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --timeout=120s
+          
+          echo "✓ All pods are ready"
+          
+          # Check pod logs for errors
+          POD_NAME=$(kubectl get pod -l app=simplewatch-php -n ${{ env.K8S_NAMESPACE }} \
+            -o jsonpath="{.items[0].metadata.name}")
+          
+          echo ""
+          echo "=== Recent Pod Logs ==="
+          kubectl logs $POD_NAME -n ${{ env.K8S_NAMESPACE }} --tail=20
+      
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "=== Deployment Summary ==="
+          echo "Status: ${{ steps.rollout.outcome }}"
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Namespace: ${{ env.K8S_NAMESPACE }}"
+          echo "Deployment: ${{ env.DEPLOYMENT_NAME }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"
