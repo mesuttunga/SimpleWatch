@@ -353,7 +353,6 @@ kubectl rollout undo deployment/simplewatch-php -n simplewatch --to-revision=2
 
 MIT
 
-
 ---
 
 **Built with ❤️ for production Kubernetes environments**
